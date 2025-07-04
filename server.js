@@ -16,87 +16,19 @@ const locations = JSON.parse(fs.readFileSync('locations.json', 'utf8'));
 const client = new MongoClient(uri);
 const app = express();
 
-// async function run() {
-//   try {
-//     await client.connect();
-//     console.log('✅ Connected to MongoDB Atlas');
+async function connectToMongo() {
+  if (!client) {
+    client = new MongoClient(uri);
+    await client.connect();
+    console.log('✅ Connected to MongoDB Atlas()');
+  }
+  const db = client.db(DB_NAME);
+  collection = db.collection(COLLECTION_NAME);
+}
 
-//     const db = client.db(DB_NAME);
-//     const collection = db.collection(COLLECTION_NAME);
 
-//     let index = 0;
-//     const total = locations.length;
-
-//     if (total === 0) {
-//       console.log('⚠️  No locations found in JSON file.');
-//       return;
-//     }
-
-//     console.log(`📌 Loaded ${total} locations.`);
-
-//     const intervalId = setInterval(async () => {
-//     //   if (index >= total) {
-//     //     console.log('✅ All locations inserted. Stopping.');
-//     //     clearInterval(intervalId);
-//     //     await client.close();
-//     //     return;
-//     //   }
-
-//       const location = locations[index];
-//       const document = {
-//         latitude: location.lat,
-//         longitude: location.lng,
-//         timestamp: new Date()
-//       };
-
-//       try {
-//         const result = await collection.insertOne(document);
-//         console.log(`✅ Inserted (${index + 1}/${total}):`, document);
-//       } catch (err) {
-//         console.error('❌ Insert failed:', err);
-//       }
-
-//       index++;
-//       if (index >= total) {
-
-//         index = 0;  // loop back to start
-
-//         console.log('🔄 All locations sent. Restarting from first.');
-
-//       }
-//     }, 3000);
-
-//   } catch (err) {
-//     console.error('❌ Error connecting to MongoDB:', err);
-//   }
-// }
-
-// async function main() {
-//   try {
-//     // Connect to MongoDB
-//     await client.connect();
-//     console.log('✅ Connected to MongoDB Atlas');
-
-//     const db = client.db(DB_NAME);
-//     collection = db.collection(COLLECTION_NAME);
-
-//     // Start inserting locations every 3 seconds
-//     // startInsertingLocations();
-
-//     // Set up Express API
-//     // setupApi();
-
-//   } catch (err) {
-//     console.error('❌ Error:', err);
-//   }
-// }
 app.get('/locations', async (req, res) => {
   try {
-    await client.connect();
-    console.log('✅ Connected to MongoDB Atlas');
-
-    const db = client.db(DB_NAME);
-    collection = db.collection(COLLECTION_NAME);
     const result = await collection
       .find({}, { projection: { _id: 0, latitude: 1, longitude: 1, timestamp: 1 } })
       .sort({ timestamp: -1 })
@@ -106,17 +38,59 @@ app.get('/locations', async (req, res) => {
     if (result.length === 0) {
       return res.status(404).json({ message: 'No location found' });
     }
-
+    
     res.json(result[0]);
   } catch (err) {
     console.error('❌ Error fetching location:', err);
     res.status(500).send('Error fetching location');
   }
 });
-app.listen(PORT, () => {
-    console.log(`🚀 API server running at http://localhost:${PORT}`);
-    console.log(`👉 Endpoint available: GET /locations`);
-  });
+
+app.get('/locations/history', async (req, res) => {
+  try {
+    const { from, to } = req.query;    
+
+    if (!from || !to) {
+      return res.status(400).json({ message: 'Missing "from" or "to" query parameters. Format: YYYY-MM-DD' });
+    }
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+
+    if (isNaN(fromDate) || isNaN(toDate)) {
+      return res.status(400).json({ message: 'Invalid date format. Use YYYY-MM-DD.' });
+    }
+
+    toDate.setHours(23, 59, 59, 999);
+
+    const results = await collection
+      .find(
+        { timestamp: { $gte: fromDate, $lte: toDate } },
+        { projection: { _id: 0, latitude: 1, longitude: 1, timestamp: 1 } }
+      )
+      .sort({ timestamp: 1 })
+      .toArray();
+
+    res.json(results);
+    
+  } catch (err) {
+    console.error('❌ Error fetching history:', err);
+    res.status(500).send('Error fetching history');
+  }
+});
 
 
-// main();
+async function startServer() {
+  try {
+    await connectToMongo();
+   // Start Express
+    app.listen(PORT, () => {
+      console.log(`🚀 API server running at http://localhost:${PORT}`);
+      console.log(`👉 GET /locations          → Latest location`);
+      console.log(`👉 GET /locations/history  → History with ?from=YYYY-MM-DD&to=YYYY-MM-DD`);
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err);
+    process.exit(1);
+  }
+}
+startServer();
